@@ -132,7 +132,7 @@ class VOCDetection(VisionDataset):
     def _preload_labels(self):
         """Preload all labels into memory."""
         logging.debug("Preloading %s labels into memory...", str(self))
-        cache_file = ("+".join([x[0] + '_' + x[1] for x in self._splits])) + '.pkl'
+        cache_file = 'voc_' + ("+".join([x[0] + '_' + x[1] for x in self._splits])) + '.pkl'
         if os.path.exists(cache_file):
             with open(cache_file, 'rb') as fin:
                 labels = pickle.load(fin)
