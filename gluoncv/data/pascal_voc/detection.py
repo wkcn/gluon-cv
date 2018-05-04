@@ -51,7 +51,7 @@ class VOCDetection(VisionDataset):
         self._root = os.path.expanduser(root)
         self._transform = transform
         self._splits = splits
-        self._items = self._load_items(splits)
+        self._items, self._nums = self._load_items(splits)
         self._anno_path = os.path.join('{}', 'Annotations', '{}.xml')
         self._image_path = os.path.join('{}', 'JPEGImages', '{}.jpg')
         self.index_map = index_map or dict(zip(self.classes, range(self.num_class)))
@@ -81,12 +81,15 @@ class VOCDetection(VisionDataset):
     def _load_items(self, splits):
         """Load individual image indices from splits."""
         ids = []
+        nums = []
         for year, name in splits:
             root = os.path.join(self._root, 'VOC' + str(year))
             lf = os.path.join(root, 'ImageSets', 'Main', name + '.txt')
             with open(lf, 'r') as f:
-                ids += [(root, line.strip()) for line in f.readlines()]
-        return ids
+                item_ids = [(root, line.strip()) for line in f.readlines()]
+                ids += item_ids
+                nums.append(len(item_ids))
+        return ids, nums
 
     def _load_label(self, idx):
         """Parse xml file and return labels."""
@@ -132,12 +135,19 @@ class VOCDetection(VisionDataset):
     def _preload_labels(self):
         """Preload all labels into memory."""
         logging.debug("Preloading %s labels into memory...", str(self))
-        cache_file = 'voc_' + ("+".join([x[0] + '_' + x[1] for x in self._splits])) + '.pkl'
-        if os.path.exists(cache_file):
-            with open(cache_file, 'rb') as fin:
-                labels = pickle.load(fin)
-            return labels
-        labels = [self._load_label(idx) for idx in range(len(self))]
-        with open(cache_file, 'wb') as fout:
-            pickle.dump(labels, fout, protocol = 2)
+        labels = []
+        labels_num = 0
+        for sp, num in zip(self._splits, self._nums):
+            year, name = sp
+            cache_file = 'voc_%s%s.pkl' % (str(year), name)
+            if os.path.exists(cache_file):
+                with open(cache_file, 'rb') as fin:
+                    labels += pickle.load(fin)
+            else:
+                loaded_labels = [self._load_label(idx) for idx in range(labels_num, labels_num + num)]
+                with open(cache_file, 'wb') as fout:
+                    pickle.dump(loaded_labels, fout, protocol = 2)
+                labels += loaded_labels
+            labels_num += num
+        assert labels_num == len(self), 'lack of labels when preloading labels (%d vs %d)' % (labels_num, len(self))
         return labels
