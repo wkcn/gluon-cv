@@ -112,4 +112,4 @@ class OHEMSampler(gluon.HybridBlock):
 
     # pylint: disable=arguments-differ
     def hybrid_forward(self, F, x, logits, ious):
-        return F.Custom(op_type = 'OHEMSamplerOP', x = x, logits = logits, ious = ious, ratio = self._ratio, min_samples = self._min_samples, thresh = self._thresh)
+        return F.Custom(x, logits, ious, op_type = 'OHEMSamplerOP', ratio = self._ratio, min_samples = self._min_samples, thresh = self._thresh)

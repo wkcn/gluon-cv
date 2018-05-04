@@ -111,8 +111,6 @@ class SSD(HybridBlock):
         self.target = set([SSDTargetGenerator(
             iou_thresh=iou_thresh, neg_thresh=neg_thresh,
             negative_mining_ratio=negative_mining_ratio, stds=stds)]) # avoid user warning
-        for t in self.target:
-            t.hybridize()
 
         with self.name_scope():
             if network is None:

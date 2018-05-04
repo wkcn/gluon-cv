@@ -42,7 +42,7 @@ class SymRepeatProp(mx.operator.CustomOpProp):
         oshape[self._axis] = rlen
         return in_shape, [oshape]
     def create_operator(self, ctx, shapes, dtypes):
-        return SymRepeatOP()
+        return SymRepeatOP(axis = self._axis, repeats_axis = self._repeats_axis)
 
 class NormalizedBoxCenterEncoder(gluon.HybridBlock):
     """Encode bounding boxes training target with normalized center offsets.
@@ -65,7 +65,7 @@ class NormalizedBoxCenterEncoder(gluon.HybridBlock):
     def hybrid_forward(self, F, samples, matches, anchors, refs):
         """Forward"""
         # TODO(zhreshold): batch_pick, take multiple elements?
-        ref_boxes = F.Custom(op_type = 'sym_repeat', data = refs.reshape((0, 1, -1, 4)), axis = 1, repeats_data = matches, repeats_axis = 1)
+        ref_boxes = F.Custom(refs.reshape((0,1,-1,4)), matches, op_type = 'sym_repeat', axis = 1, repeats_axis = 1)
         ref_boxes = F.split(ref_boxes, axis=-1, num_outputs=4, squeeze_axis=True)
         ref_boxes = F.concat(*[F.pick(ref_boxes[i], matches, axis=2).reshape((0, -1, 1)) \
             for i in range(4)], dim=2)
@@ -127,7 +127,7 @@ class MultiClassEncoder(gluon.HybridBlock):
         self._ignore_label = ignore_label
 
     def hybrid_forward(self, F, samples, matches, refs):
-        refs = F.Custom(op_type = 'sym_repeat', data = refs.reshape((0, 1, -1)), axis=1, repeats_data = matches, repeats_axis = 1)
+        refs = F.Custom(refs.reshape((0,1,-1)), matches, op_type = 'sym_repeat', axis=1, repeats_axis = 1)
         target_ids = F.pick(refs, matches, axis=2) + 1
         targets = F.where(samples > 0.5, target_ids, F.ones_like(target_ids) * self._ignore_label)
         targets = F.where(samples < -0.5, F.zeros_like(targets), targets)
