@@ -26,35 +26,15 @@ class NaiveSampler(gluon.HybridBlock):
         y = F.where(x >= 0, marker, marker * -1)
         return y
 
-
-class OHEMSampler(gluon.Block):
-    """A sampler implementing Online Hard-negative mining.
-    As described in paper https://arxiv.org/abs/1604.03540.
-
-    Parameters
-    ----------
-    ratio : float
-        Ratio of negative vs. positive samples. Values >= 1.0 is recommended.
-    min_samples : int, default 0
-        Minimum samples to be selected regardless of positive samples.
-        For example, if positive samples is 0, we sometimes still want some num_negative
-        samples to be selected.
-    thresh : float, default 0.5
-        IOU overlap threshold of selected negative samples. IOU must not exceed
-        this threshold such that good matching anchors won't be selected as
-        negative samples.
-
-    """
-    def __init__(self, ratio, min_samples=0, thresh=0.5):
-        super(OHEMSampler, self).__init__()
-        assert ratio > 0, "OHEMSampler ratio must > 0, {} given".format(ratio)
+class OHEMSamplerOP(mx.operator.CustomOp):
+    def __init__(self, ratio, min_samples, thresh):
+        super(OHEMSamplerOP, self).__init__()
         self._ratio = ratio
         self._min_samples = min_samples
         self._thresh = thresh
-
-    # pylint: disable=arguments-differ
-    def forward(self, x, logits, ious):
+    def forward(self, is_train, req, in_data, out_data, aux):
         """Forward"""
+        x, logits, ious = in_data
         F = nd
         num_positive = F.sum(x > -1, axis=1)
         num_negative = self._ratio * num_positive
@@ -80,4 +60,49 @@ class OHEMSampler(gluon.Block):
         for i, num_neg in zip(range(x.shape[0]), num_negative.asnumpy().astype(np.int32)):
             indices = argmaxs[i, :num_neg]
             y[i, indices.astype(np.int32)] = -1  # assign negative samples
-        return F.array(y, ctx=x.context)
+        self.assign(out_data[0], req[0], y)
+
+@mx.operator.register('OHEMSamplerOP')
+class OHEMSamplerProp(mx.operator.CustomOpProp):
+    def __init__(self, ratio, min_samples, thresh):
+        self._ratio = float(ratio)
+        self._min_samples = int(min_samples)
+        self._thresh = float(thresh) 
+    def list_arguments(self):
+        return ['x', 'logits', 'ious']
+    def list_outputs(self):
+        return ['y']
+    def infer_shape(self, in_shape):
+        oshape = in_shape[0]
+        return in_shape, [oshape]
+    def create_operator(self, ctx, shapes, dtypes):
+        return OHEMSamplerOP(self._ratio, self._min_samples, self._thresh)
+
+class OHEMSampler(gluon.HybridBlock):
+    """A sampler implementing Online Hard-negative mining.
+    As described in paper https://arxiv.org/abs/1604.03540.
+
+    Parameters
+    ----------
+    ratio : float
+        Ratio of negative vs. positive samples. Values >= 1.0 is recommended.
+    min_samples : int, default 0
+        Minimum samples to be selected regardless of positive samples.
+        For example, if positive samples is 0, we sometimes still want some num_negative
+        samples to be selected.
+    thresh : float, default 0.5
+        IOU overlap threshold of selected negative samples. IOU must not exceed
+        this threshold such that good matching anchors won't be selected as
+        negative samples.
+
+    """
+    def __init__(self, ratio, min_samples=0, thresh=0.5):
+        super(OHEMSampler, self).__init__()
+        assert ratio > 0, "OHEMSampler ratio must > 0, {} given".format(ratio)
+        self._ratio = ratio
+        self._min_samples = min_samples
+        self._thresh = thresh
+
+    # pylint: disable=arguments-differ
+    def hybrid_forward(self, F, x, logits, ious):
+        return F.Custom(op_type = 'OHEMSamplerOP', x, logits, ious)
