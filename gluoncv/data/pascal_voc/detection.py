@@ -3,6 +3,7 @@ from __future__ import division
 import os
 import logging
 import numpy as np
+import pickle
 try:
     import xml.etree.cElementTree as ET
 except ImportError:
@@ -131,4 +132,12 @@ class VOCDetection(VisionDataset):
     def _preload_labels(self):
         """Preload all labels into memory."""
         logging.debug("Preloading %s labels into memory...", str(self))
-        return [self._load_label(idx) for idx in range(len(self))]
+        cache_file = ("+".join([x[0] + '_' + x[1] for x in self._splits])) + '.pkl'
+        if os.path.exists(cache_file):
+            with open(cache_file, 'rb') as fin:
+                labels = pickle.load(fin)
+            return labels
+        labels = [self._load_label(idx) for idx in range(len(self))]
+        with open(cache_file, 'wb') as fout:
+            pickle.dump(labels, fout, protocol = 2)
+        return labels
