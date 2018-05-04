@@ -11,6 +11,7 @@ from __future__ import absolute_import
 import numpy as np
 from mxnet import gluon
 from mxnet import nd
+import mxnet as mx
 
 
 class NaiveSampler(gluon.HybridBlock):
@@ -105,4 +106,4 @@ class OHEMSampler(gluon.HybridBlock):
 
     # pylint: disable=arguments-differ
     def hybrid_forward(self, F, x, logits, ious):
-        return F.Custom(op_type = 'OHEMSamplerOP', x, logits, ious)
+        return F.Custom(op_type = 'OHEMSamplerOP', x = x, logits = logits, ious = ious)
