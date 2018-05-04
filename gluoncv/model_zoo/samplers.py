@@ -63,9 +63,15 @@ class OHEMSamplerOP(mx.operator.CustomOp):
             y[i, indices.astype(np.int32)] = -1  # assign negative samples
         self.assign(out_data[0], req[0], y)
 
+    def backward(self, req, out_grad, in_data, out_data, in_grad, aux):
+        self.assign(in_grad[0], req[0], 0)
+        self.assign(in_grad[1], req[1], 0)
+        self.assign(in_grad[2], req[2], 0)
+
 @mx.operator.register('OHEMSamplerOP')
 class OHEMSamplerProp(mx.operator.CustomOpProp):
     def __init__(self, ratio, min_samples, thresh):
+        super(OHEMSamplerProp, self).__init__(need_top_grad = False)
         self._ratio = float(ratio)
         self._min_samples = int(min_samples)
         self._thresh = float(thresh) 
@@ -106,4 +112,4 @@ class OHEMSampler(gluon.HybridBlock):
 
     # pylint: disable=arguments-differ
     def hybrid_forward(self, F, x, logits, ious):
-        return F.Custom(op_type = 'OHEMSamplerOP', x = x, logits = logits, ious = ious)
+        return F.Custom(op_type = 'OHEMSamplerOP', x = x, logits = logits, ious = ious, ratio = self._ratio, min_samples = self._min_samples, thresh = self._thresh)

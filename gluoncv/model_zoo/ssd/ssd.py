@@ -108,9 +108,9 @@ class SSD(HybridBlock):
         self.num_classes = len(classes) + 1
         self.nms_thresh = nms_thresh
         self.nms_topk = nms_topk
-        self.target = [SSDTargetGenerator(
+        self.target = set([SSDTargetGenerator(
             iou_thresh=iou_thresh, neg_thresh=neg_thresh,
-            negative_mining_ratio=negative_mining_ratio, stds=stds)]
+            negative_mining_ratio=negative_mining_ratio, stds=stds)]) # avoid user warning
         for t in self.target:
             t.hybridize()
 
@@ -145,7 +145,7 @@ class SSD(HybridBlock):
 
     @property
     def target_generator(self):
-        return self.target[0]
+        return list(self.target)[0]
 
     # pylint: disable=arguments-differ
     def hybrid_forward(self, F, x):

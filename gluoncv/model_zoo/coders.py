@@ -8,9 +8,43 @@ from __future__ import absolute_import
 from mxnet import nd
 from mxnet import gluon
 from .bbox import BBoxCornerToCenter
+import mxnet as mx
 
+class SymRepeatOP(mx.operator.CustomOp):
+    def __init__(self, axis, repeats_axis):
+        super(SymRepeatOP, self).__init__()
+        self._axis = axis
+        self._repeats_axis = repeats_axis
+    def forward(self, is_train, req, in_data, out_data, aux):
+        data, repeats = in_data
+        s = repeats.shape[self._repeats_axis] // data.shape[self._axis]
+        self.assign(out_data[0], req[0], nd.repeat(data, axis = self._axis, repeats = s))
+    def backward(self, req, out_grad, in_data, out_data, in_grad, aux):
+        self.assign(in_grad[0], 0) # temp definition
+        self.assign(in_grad[1], 0)
 
-class NormalizedBoxCenterEncoder(gluon.Block):
+@mx.operator.register('sym_repeat')
+class SymRepeatProp(mx.operator.CustomOpProp):
+    def __init__(self, axis, repeats_axis):
+        super(SymRepeatProp, self).__init__(need_top_grad = False)
+        self._axis = int(axis)
+        self._repeats_axis = int(repeats_axis)
+    def list_arguments(self):
+        return ['data', 'repeats_data']
+    def list_outputs(self):
+        return ['targets']
+    def infer_shape(self, in_shape):
+        dshape, rshape = in_shape
+        dlen = dshape[self._axis]
+        rlen = rshape[self._repeats_axis]
+        assert rlen % dlen == 0
+        oshape = list(dshape)
+        oshape[self._axis] = rlen
+        return in_shape, [oshape]
+    def create_operator(self, ctx, shapes, dtypes):
+        return SymRepeatOP()
+
+class NormalizedBoxCenterEncoder(gluon.HybridBlock):
     """Encode bounding boxes training target with normalized center offsets.
 
     Input bounding boxes are using corner type: `x_{min}, y_{min}, x_{max}, y_{max}`.
@@ -28,13 +62,12 @@ class NormalizedBoxCenterEncoder(gluon.Block):
         with self.name_scope():
             self.corner_to_center = BBoxCornerToCenter(split=True)
 
-    def forward(self, samples, matches, anchors, refs):
+    def hybrid_forward(self, F, samples, matches, anchors, refs):
         """Forward"""
-        F = nd
         # TODO(zhreshold): batch_pick, take multiple elements?
-        ref_boxes = nd.repeat(refs.reshape((0, 1, -1, 4)), axis=1, repeats=matches.shape[1])
-        ref_boxes = nd.split(ref_boxes, axis=-1, num_outputs=4, squeeze_axis=True)
-        ref_boxes = nd.concat(*[F.pick(ref_boxes[i], matches, axis=2).reshape((0, -1, 1)) \
+        ref_boxes = F.Custom(op_type = 'sym_repeat', data = refs.reshape((0, 1, -1, 4)), axis = 1, repeats_data = matches, repeats_axis = 1)
+        ref_boxes = F.split(ref_boxes, axis=-1, num_outputs=4, squeeze_axis=True)
+        ref_boxes = F.concat(*[F.pick(ref_boxes[i], matches, axis=2).reshape((0, -1, 1)) \
             for i in range(4)], dim=2)
         g = self.corner_to_center(ref_boxes)
         a = self.corner_to_center(anchors)
@@ -47,7 +80,6 @@ class NormalizedBoxCenterEncoder(gluon.Block):
         targets = F.where(temp, codecs, F.zeros_like(codecs))
         masks = F.where(temp, F.ones_like(temp), F.zeros_like(temp))
         return targets, masks
-
 
 class NormalizedBoxCenterDecoder(gluon.HybridBlock):
     """Decode bounding boxes training target with normalized center offsets.
@@ -76,7 +108,6 @@ class NormalizedBoxCenterDecoder(gluon.HybridBlock):
         oh = F.broadcast_mul(F.exp(p[3] * self._stds[3]), a[3]) / 2
         return F.concat(ox - ow, oy - oh, ox + ow, oy + oh, dim=-1)
 
-
 class MultiClassEncoder(gluon.HybridBlock):
     """Encode classification training target given matching results.
 
@@ -96,10 +127,10 @@ class MultiClassEncoder(gluon.HybridBlock):
         self._ignore_label = ignore_label
 
     def hybrid_forward(self, F, samples, matches, refs):
-        refs = F.repeat(refs.reshape((0, 1, -1)), axis=1, repeats=matches.shape[1])
+        refs = F.Custom(op_type = 'sym_repeat', data = refs.reshape((0, 1, -1)), axis=1, repeats_data = matches, repeats_axis = 1)
         target_ids = F.pick(refs, matches, axis=2) + 1
-        targets = F.where(samples > 0.5, target_ids, nd.ones_like(target_ids) * self._ignore_label)
-        targets = F.where(samples < -0.5, nd.zeros_like(targets), targets)
+        targets = F.where(samples > 0.5, target_ids, F.ones_like(target_ids) * self._ignore_label)
+        targets = F.where(samples < -0.5, F.zeros_like(targets), targets)
         return targets
 
 
