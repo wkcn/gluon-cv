@@ -2,14 +2,14 @@
 from __future__ import absolute_import
 
 from mxnet import nd
-from mxnet.gluon import Block
+from mxnet.gluon import HybridBlock
 from ..matchers import CompositeMatcher, BipartiteMatcher, MaximumMatcher
 from ..samplers import OHEMSampler
 from ..coders import MultiClassEncoder, NormalizedBoxCenterEncoder
 from ..bbox import BBoxCenterToCorner
 
 
-class SSDTargetGenerator(Block):
+class SSDTargetGenerator(HybridBlock):
     """Training targets generator for Single-shot Object Detection.
 
     Parameters
@@ -33,9 +33,9 @@ class SSDTargetGenerator(Block):
         self._center_to_corner = BBoxCenterToCorner(split=False)
 
     # pylint: disable=arguments-differ
-    def forward(self, anchors, cls_preds, gt_boxes, gt_ids):
+    def hybrid_forward(self, F, anchors, cls_preds, gt_boxes, gt_ids):
         anchors = self._center_to_corner(anchors.reshape((-1, 4)))
-        ious = nd.transpose(nd.contrib.box_iou(anchors, gt_boxes), (1, 0, 2))
+        ious = F.transpose(F.contrib.box_iou(anchors, gt_boxes), (1, 0, 2))
         matches = self._matcher(ious)
         samples = self._sampler(matches, cls_preds, ious)
         cls_targets = self._cls_encoder(samples, matches, gt_ids)
