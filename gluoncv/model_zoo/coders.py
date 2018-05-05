@@ -71,10 +71,10 @@ class NormalizedBoxCenterEncoder(gluon.HybridBlock):
             for i in range(4)], dim=2)
         g = self.corner_to_center(ref_boxes)
         a = self.corner_to_center(anchors)
-        t0 = (g[0] - a[0]) / a[2] / self._stds[0]
-        t1 = (g[1] - a[1]) / a[3] / self._stds[1]
-        t2 = F.log(g[2] / a[2]) / self._stds[2]
-        t3 = F.log(g[3] / a[3]) / self._stds[3]
+        t0 = F.broadcast_div(F.broadcast_minus(g[0], a[0]), a[2]) / self._stds[0]
+        t1 = F.broadcast_div(F.broadcast_minus(g[1], a[1]), a[3]) / self._stds[1]
+        t2 = F.log(F.broadcast_div(g[2], a[2])) / self._stds[2]
+        t3 = F.log(F.broadcast_div(g[3], a[3])) / self._stds[3]
         codecs = F.concat(t0, t1, t2, t3, dim=2)
         temp = F.tile(samples.reshape((0, -1, 1)), reps=(1, 1, 4)) > 0.5
         targets = F.where(temp, codecs, F.zeros_like(codecs))
