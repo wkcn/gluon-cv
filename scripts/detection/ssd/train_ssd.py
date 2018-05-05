@@ -200,7 +200,7 @@ def train(net, train_data, val_data, classes, args):
                 nd.waitall()
 
                 # n_pos is the overall positive samples in the entire batch
-                n_pos = max(1, np.sum(num_positive.asscalar()))
+                n_pos = max(1, np.sum([u.asscalar() for u in num_positive]))
                 for l3, l4 in zip(losses3, losses4):
                     # normalize the losses by n_pos
                     L = l3 / n_pos + l4 / n_pos
