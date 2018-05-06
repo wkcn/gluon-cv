@@ -147,6 +147,8 @@ def train(net, train_data, val_data, classes, args):
     logger.info(args)
     logger.info('Start training from [Epoch %d]' % args.start_epoch)
     best_map = [0]
+    mean_ap = [0]
+    net.hybridize()
     for epoch in range(args.start_epoch, args.epochs):
         while lr_steps and epoch >= lr_steps[0]:
             new_lr = trainer.learning_rate * lr_decay
@@ -158,7 +160,6 @@ def train(net, train_data, val_data, classes, args):
         smoothl1_metric.reset()
         tic = time.time()
         btic = time.time()
-        net.hybridize()
         for i, batch in enumerate(train_data):
             batch_size = batch[0].shape[0]
             data = gluon.utils.split_and_load(batch[0], ctx_list=ctx, batch_axis=0)
@@ -228,10 +229,21 @@ def train(net, train_data, val_data, classes, args):
         name3, loss3 = acc_metric.get()
         logger.info('[Epoch %d] Training cost: %f, %s=%f, %s=%f, %s=%f'%(
             epoch, (time.time()-tic), name1, loss1, name2, loss2, name3, loss3))
-        map_name, mean_ap = validate(net, val_data, ctx, classes)
-        val_msg = '\n'.join(['%s=%f'%(k, v) for k, v in zip(map_name, mean_ap)])
-        logger.info('[Epoch %d] Validation: \n%s'%(epoch, val_msg))
-        save_params(net, best_map, mean_ap[-1], epoch, args.save_interval, args.save_prefix)
+        need_validation = False
+        try:
+            need_val_file = open("need_validation.txt")
+            u = int(need_val_file.readline())
+            if u > 0:
+                need_validation = (epoch % u == 0)
+	except:
+	    print ("Wrong need_validation.txt")
+	if need_validation or args.epochs - epoch <= 3:
+            val_tic = time.time()
+	    map_name, mean_ap = validate(net, val_data, ctx, classes)
+	    val_msg = '\n'.join(['%s=%f'%(k, v) for k, v in zip(map_name, mean_ap)])
+            logger.info('[Epoch %d] Validation: \n%s'%(epoch, val_msg))
+            logger.info('Validation Cost: %f' % (time.time() - val_tic))
+	save_params(net, best_map, mean_ap[-1], epoch, args.save_interval, args.save_prefix)
 
 if __name__ == '__main__':
     args = parse_args()

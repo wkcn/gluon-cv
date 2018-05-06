@@ -20,8 +20,8 @@ class SymRepeatOP(mx.operator.CustomOp):
         s = repeats.shape[self._repeats_axis] // data.shape[self._axis]
         self.assign(out_data[0], req[0], nd.repeat(data, axis = self._axis, repeats = s))
     def backward(self, req, out_grad, in_data, out_data, in_grad, aux):
-        self.assign(in_grad[0], 0) # temp definition
-        self.assign(in_grad[1], 0)
+        self.assign(in_grad[0], req[0], 0) # temp definition
+        self.assign(in_grad[1], req[1], 0)
 
 @mx.operator.register('sym_repeat')
 class SymRepeatProp(mx.operator.CustomOpProp):
