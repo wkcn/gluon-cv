@@ -15,6 +15,7 @@ from gluoncv.data.transforms.presets.ssd import SSDDefaultTrainTransform
 from gluoncv.data.transforms.presets.ssd import SSDDefaultValTransform
 from gluoncv.utils.metrics.voc_detection import VOC07MApMetric
 from gluoncv.utils.metrics.accuracy import Accuracy
+from function_parallel import FunctionParallel
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train SSD networks.')
@@ -123,6 +124,41 @@ def train(net, train_data, val_data, classes, args):
     trainer = gluon.Trainer(
         net.collect_params(), 'sgd',
         {'learning_rate': args.lr, 'wd': args.wd, 'momentum': args.momentum})
+    net.hybridize()
+
+    def func(data):
+        x, y = data
+        cls_preds, box_preds, anchors = net(x)
+        with autograd.pause():
+            # we generate training targets here in autograd.pause scope
+            # because we don't need to bp to labels. This can reduce the
+            # overhead of auto differentiation.
+            gt_boxes = nd.slice_axis(y, axis=-1, begin=0, end=4)
+            gt_ids = nd.slice_axis(y, axis=-1, begin=4, end=5)
+            cls_targets, box_targets, box_masks = net.target_generator(
+                anchors, cls_preds, gt_boxes, gt_ids)
+            # save how many positive samples are used, it will be used to
+
+            # cls loss, multi class cross entropy loss, we mask out ignored
+            # labels here by broadcast_mul the positive labels
+            l1 = cls_loss(cls_preds, cls_targets, (cls_targets >= 0).expand_dims(axis=-1))
+            # box loss, it's a huber loss(or namely smoothl1 loss in paper)
+            l2 = box_loss(box_preds * box_masks, box_targets)
+        return (nd.sum(cls_targets > 0), # num_positive 
+               l1 * cls_targets.size / cls_targets.shape[0], # losses3,
+               l2 * box_targets.size / box_targets.shape[0], # losses4
+               cls_preds, # outputs
+               cls_targets) # labels
+
+    num_ctx = len(ctx)
+    net_parallel = FunctionParallel(func)
+
+    # pre-forward
+    batch = train_data[0]
+    data = gluon.utils.split_and_load(batch[0], ctx_list=ctx, batch_axis=0)
+    # label = gluon.utils.split_and_load(batch[1], ctx_list=ctx, batch_axis=0)
+    net(data[0])
+    # pre-forward finished
 
     # lr decay policy
     lr_decay = float(args.lr_decay)
@@ -158,7 +194,6 @@ def train(net, train_data, val_data, classes, args):
         smoothl1_metric.reset()
         tic = time.time()
         btic = time.time()
-        net.hybridize()
         for i, batch in enumerate(train_data):
             batch_size = batch[0].shape[0]
             data = gluon.utils.split_and_load(batch[0], ctx_list=ctx, batch_axis=0)
@@ -171,32 +206,14 @@ def train(net, train_data, val_data, classes, args):
             losses4 = []  # temporary box loss holder
             Ls = []
             num_positive = []
+            records = [num_positive, losses3, losses4, outputs, labels]
+            for r in records:
+                r[:] = [None for _ in range(num_ctx)]
+
             with autograd.record():
-                for x, y in zip(data, label):
-                    cls_preds, box_preds, anchors = net(x)
-                    with autograd.pause():
-                        # we generate training targets here in autograd.pause scope
-                        # because we don't need to bp to labels. This can reduce the
-                        # overhead of auto differentiation.
-                        gt_boxes = nd.slice_axis(y, axis=-1, begin=0, end=4)
-                        gt_ids = nd.slice_axis(y, axis=-1, begin=4, end=5)
-                        cls_targets, box_targets, box_masks = net.target_generator(
-                            anchors, cls_preds, gt_boxes, gt_ids)
-                        # save how many positive samples are used, it will be used to
-                        # normalize the loss
-                        num_positive.append(nd.sum(cls_targets > 0))
-
-                    # cls loss, multi class cross entropy loss, we mask out ignored
-                    # labels here by broadcast_mul the positive labels
-                    l1 = cls_loss(cls_preds, cls_targets, (cls_targets >= 0).expand_dims(axis=-1))
-                    losses3.append(l1 * cls_targets.size / cls_targets.shape[0])
-                    # box loss, it's a huber loss(or namely smoothl1 loss in paper)
-                    l2 = box_loss(box_preds * box_masks, box_targets)
-                    losses4.append(l2 * box_targets.size / box_targets.shape[0])
-                    # some records for metrics
-                    outputs.append(cls_preds)
-                    labels.append(cls_targets)
-
+                for ctx_id, out in enumerate(net_parallel(zip(data, label))):
+                    for i, r in enumerate(records):
+                        r[ctx_id] = out[i]
                 nd.waitall()
 
                 # n_pos is the overall positive samples in the entire batch
