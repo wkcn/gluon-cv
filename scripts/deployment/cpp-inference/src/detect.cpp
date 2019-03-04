@@ -26,6 +26,8 @@
 #include "common.hpp"
 #include "clipp.hpp"
 #include <chrono>
+#include <iostream>
+using namespace std;
 
 namespace synset {
 // some commonly used datasets
@@ -111,6 +113,13 @@ void ParseArgs(int argc, char** argv) {
     }
 }
 
+void PRINT_SHAPE(NDArray &data) {
+    for (int u : data.GetShape() ) {
+      cout << u << ", ";
+    }
+    cout << endl;
+}
+
 void RunDemo() {
     // context
     Context ctx = Context::cpu();
@@ -135,7 +144,10 @@ void RunDemo() {
     }
 
     // set input and bind executor
-    auto data = AsData(image, ctx);
+    auto data_s = AsData(image, ctx);
+    NDArray data;
+    Operator("tile").SetParam("reps", nnvm::TShape({2, 1, 1, 1}))(data_s).Invoke(data);
+    PRINT_SHAPE(data);
     args["data"] = data;
     Executor *exec = net.SimpleBind(
       ctx, args, std::map<std::string, NDArray>(),
@@ -145,9 +157,21 @@ void RunDemo() {
     NDArray::WaitAll();
     auto start = std::chrono::steady_clock::now();
     exec->Forward(false);
-    auto ids = exec->outputs[0].Copy(Context(kCPU, 0));
-    auto scores = exec->outputs[1].Copy(Context(kCPU, 0));
-    auto bboxes = exec->outputs[2].Copy(Context(kCPU, 0));
+    auto ids_s = exec->outputs[0].Copy(Context(kCPU, 0));
+    auto scores_s = exec->outputs[1].Copy(Context(kCPU, 0));
+    auto bboxes_s = exec->outputs[2].Copy(Context(kCPU, 0));
+    NDArray ids, scores, bboxes;
+    int pid = 0;
+    auto sop = Operator("slice_axis").SetParam("axis", 0).SetParam("begin", pid).SetParam("end", pid + 1);
+    auto sop2 = Operator("slice_axis").SetParam("axis", 0).SetParam("begin", pid).SetParam("end", pid + 1);
+    auto sop3 = Operator("slice_axis").SetParam("axis", 0).SetParam("begin", pid).SetParam("end", pid + 1);
+    sop(ids_s).Invoke(ids);
+    sop2(scores_s).Invoke(scores);
+    sop3(bboxes_s).Invoke(bboxes);
+
+    PRINT_SHAPE(ids);
+    PRINT_SHAPE(scores);
+    PRINT_SHAPE(bboxes);
     NDArray::WaitAll();
     auto end = std::chrono::steady_clock::now();
     if (!args::quite) {
