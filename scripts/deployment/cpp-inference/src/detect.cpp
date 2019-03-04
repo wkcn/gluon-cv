@@ -145,8 +145,21 @@ void RunDemo() {
 
     // set input and bind executor
     auto data_s = AsData(image, ctx);
-    NDArray data;
-    Operator("tile").SetParam("reps", nnvm::TShape({2, 1, 1, 1}))(data_s).Invoke(data);
+    PRINT_SHAPE(data_s);
+    mx_uint batch_size = 2;
+    NDArray data(Shape{batch_size, 512, 576, 3}, ctx); 
+    data = 0;
+    vector<mx_uint> shape = data.GetShape();
+    for (mx_uint pid = 0; pid < batch_size; ++pid) {
+      Operator("_slice_assign")
+        .SetParam("begin", nnvm::Tuple<mx_uint>({pid, 0, 0, 0}))
+        .SetParam("end", nnvm::Tuple<mx_uint>({pid + 1, shape[1], shape[2], 3}))
+        .SetParam("step", nnvm::Tuple<mx_uint>({1, 1, 1, 1}))
+        (data, data_s).Invoke(data); 
+      break;
+    }
+    // Operator("tile").SetParam("reps", nnvm::TShape({2, 1, 1, 1}))(data_s).Invoke(data);
+
     PRINT_SHAPE(data);
     args["data"] = data;
     Executor *exec = net.SimpleBind(
@@ -161,35 +174,35 @@ void RunDemo() {
     auto scores_s = exec->outputs[1].Copy(Context(kCPU, 0));
     auto bboxes_s = exec->outputs[2].Copy(Context(kCPU, 0));
     NDArray ids, scores, bboxes;
-    int pid = 0;
-    auto sop = Operator("slice_axis").SetParam("axis", 0).SetParam("begin", pid).SetParam("end", pid + 1);
-    auto sop2 = Operator("slice_axis").SetParam("axis", 0).SetParam("begin", pid).SetParam("end", pid + 1);
-    auto sop3 = Operator("slice_axis").SetParam("axis", 0).SetParam("begin", pid).SetParam("end", pid + 1);
-    sop(ids_s).Invoke(ids);
-    sop2(scores_s).Invoke(scores);
-    sop3(bboxes_s).Invoke(bboxes);
-
-    PRINT_SHAPE(ids);
-    PRINT_SHAPE(scores);
-    PRINT_SHAPE(bboxes);
     NDArray::WaitAll();
-    auto end = std::chrono::steady_clock::now();
-    if (!args::quite) {
+    for (mx_uint pid = 0; pid < batch_size; ++pid) {
+      auto sop = Operator("slice_axis").SetParam("axis", 0).SetParam("begin", pid).SetParam("end", pid + 1);
+      auto sop2 = Operator("slice_axis").SetParam("axis", 0).SetParam("begin", pid).SetParam("end", pid + 1);
+      auto sop3 = Operator("slice_axis").SetParam("axis", 0).SetParam("begin", pid).SetParam("end", pid + 1);
+      sop(ids_s).Invoke(ids);
+      sop2(scores_s).Invoke(scores);
+      sop3(bboxes_s).Invoke(bboxes);
+      NDArray::WaitAll();
+
+      auto end = std::chrono::steady_clock::now();
+      if (!args::quite) {
         LOG(INFO) << "Elapsed time {Forward->Result}: " << std::chrono::duration<double, std::milli>(end - start).count() << " ms";
-    }
+      }
 
-    // draw boxes
-    auto plt = viz::PlotBbox(image, bboxes, scores, ids, args::viz_thresh, synset::CLASS_NAMES, std::map<int, cv::Scalar>(), !args::quite);
+      // draw boxes
+      auto plt = viz::PlotBbox(image, bboxes, scores, ids, args::viz_thresh, synset::CLASS_NAMES, std::map<int, cv::Scalar>(), !args::quite);
 
-    // display drawn image
-    if (!args::no_display) {
+      // display drawn image
+      if (!args::no_display) {
         cv::imshow("plot", plt);
         cv::waitKey();
-    }
+      }
 
-    // output image
-    if (!args::output.empty()) {
+      // output image
+      if (!args::output.empty()) {
         cv::imwrite(args::output, plt);
+      }
+
     }
 
     delete exec;
