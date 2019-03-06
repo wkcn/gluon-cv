@@ -26,8 +26,6 @@
 #include "common.hpp"
 #include "clipp.hpp"
 #include <chrono>
-#include <iostream>
-using namespace std;
 
 namespace synset {
 // some commonly used datasets
@@ -113,13 +111,6 @@ void ParseArgs(int argc, char** argv) {
     }
 }
 
-void PRINT_SHAPE(NDArray &data) {
-    for (int u : data.GetShape() ) {
-      cout << u << ", ";
-    }
-    cout << endl;
-}
-
 void RunDemo() {
     // context
     Context ctx = Context::cpu();
@@ -144,30 +135,29 @@ void RunDemo() {
     }
 
     // set input and bind executor
-    auto data_s = AsData(image, ctx);
-    PRINT_SHAPE(data_s);
-    mx_uint batch_size = 2;
-    NDArray data(Shape{batch_size, 512, 576, 3}, ctx); 
-    data = 0;
-    vector<mx_uint> shape = data.GetShape();
-    for (mx_uint pid = 0; pid < batch_size; ++pid) {
-      Operator("_slice_assign")
-        .SetParam("begin", nnvm::Tuple<mx_uint>({pid, 0, 0, 0}))
-        .SetParam("end", nnvm::Tuple<mx_uint>({pid + 1, shape[1], shape[2], 3}))
-        .SetParam("step", nnvm::Tuple<mx_uint>({1, 1, 1, 1}))
-        (data, data_s).Invoke(data); 
-      break;
-    }
-    // Operator("tile").SetParam("reps", nnvm::TShape({2, 1, 1, 1}))(data_s).Invoke(data);
+    NDArray img = AsData(image, ctx);
 
-    PRINT_SHAPE(data);
+    mx_uint batch_size = 2;
+    NDArray data(Shape{batch_size, 512, 579, 3}, ctx); 
+    std::vector<mx_uint> shape = img.GetShape();
+
+    NDArray::WaitAll();
+    for (int pid = 0; pid < batch_size; ++pid) {
+      Operator("_slice_assign")
+        .SetInput("lhs", data)
+        .SetInput("rhs", img)
+        .SetParam("begin", Shape(pid, 0, 0, 0))
+        .SetParam("end", Shape(pid+1, shape[1], shape[2], 3))
+        ().Invoke(data); 
+    }
+
     args["data"] = data;
+
     Executor *exec = net.SimpleBind(
       ctx, args, std::map<std::string, NDArray>(),
       std::map<std::string, OpReqType>(), auxs);
 
     // begin forward
-    NDArray::WaitAll();
     auto start = std::chrono::steady_clock::now();
     exec->Forward(false);
     auto ids_s = exec->outputs[0].Copy(Context(kCPU, 0));
