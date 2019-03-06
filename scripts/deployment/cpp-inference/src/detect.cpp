@@ -70,6 +70,7 @@ static float viz_thresh = 0.3;
 static int min_size = 512;
 static int max_size = 640;
 static int multiplier = 32;  // just to ensure image shapes are multipliers of feature strides, for yolo3 models
+static bool interactive = false;
 }  // namespace args
 
 void ParseArgs(int argc, char** argv) {
@@ -84,6 +85,7 @@ void ParseArgs(int argc, char** argv) {
         (option("--gpu") & integer("gpu", args::gpu)) % "Which gpu to use, by default is -1, means cpu only.",
         option("-q", "--quite").set(args::quite).doc("Quite mode, no screen output"),
         option("--no-disp").set(args::no_display).doc("Do not display image"),
+        option("--interactive").set(args::interactive),
         (option("-t", "--thresh") & number("thresh", args::viz_thresh)) % "Visualize threshold, from 0 to 1, default 0.3."
     );
     if (!parse(argc, argv, cli) || args::model.empty() || args::image.empty()) {
@@ -111,6 +113,17 @@ void ParseArgs(int argc, char** argv) {
     }
 }
 
+cv::Mat LoadImage(const std::string &fname) {
+    // load image as data
+    cv::Mat image = cv::imread(fname, 1);
+    // resize to avoid huge image, keep aspect ratio
+    image = ResizeShortWithin(image, args::min_size, args::max_size, args::multiplier);
+    if (!args::quite) {
+        LOG(INFO) << "Image shape: " << image.cols << " x " << image.rows;
+    }
+    return image;
+}
+
 void RunDemo() {
     // context
     Context ctx = Context::cpu();
@@ -126,28 +139,45 @@ void RunDemo() {
     std::map<std::string, NDArray> args, auxs;
     LoadCheckpoint(args::model, args::epoch, &net, &args, &auxs, ctx);
 
-    // load image as data
-    cv::Mat image = cv::imread(args::image, 1);
-    // resize to avoid huge image, keep aspect ratio
-    image = ResizeShortWithin(image, args::min_size, args::max_size, args::multiplier);
-    if (!args::quite) {
-        LOG(INFO) << "Image shape: " << image.cols << " x " << image.rows;
+    std::vector<cv::Mat> imgs;
+    std::vector<NDArray> mx_imgs;
+
+    if (args::interactive) {
+      mx_uint batch_size;
+      std::cin >> batch_size;
+      for (int b = 0; b < batch_size; ++b) {
+        std::string fname;
+        std::cin >> fname;
+        cv::Mat img = LoadImage(fname);
+        NDArray mx_img = AsData(img, ctx);
+        imgs.push_back(img);
+        mx_imgs.push_back(mx_img);
+      }
+    } else {
+      cv::Mat img = LoadImage(args::image);
+      // set input and bind executor
+      NDArray mx_img = AsData(img, ctx);
+      imgs.push_back(img);
+      mx_imgs.push_back(mx_img);
+    }
+    mx_uint batch_size = imgs.size();
+    mx_uint height = 0, width = 0;
+    for (int b = 0; b < batch_size; ++b) {
+      NDArray &mx_img = mx_imgs[b];
+      std::vector<mx_uint> shape = mx_img.GetShape();
+      height = std::max(height, shape[1]);
+      width = std::max(width, shape[2]);
     }
 
-    // set input and bind executor
-    NDArray img = AsData(image, ctx);
-
-    mx_uint batch_size = 2;
-    NDArray data(Shape{batch_size, 512, 579, 3}, ctx); 
-    std::vector<mx_uint> shape = img.GetShape();
-
-    NDArray::WaitAll();
-    for (int pid = 0; pid < batch_size; ++pid) {
+    NDArray data = NDArray(Shape{batch_size, height, width, 3}, ctx); 
+    for (int b = 0; b < batch_size; ++b) {
+      NDArray &mx_img = mx_imgs[b];
+      std::vector<mx_uint> shape = mx_img.GetShape();
       Operator("_slice_assign")
         .SetInput("lhs", data)
-        .SetInput("rhs", img)
-        .SetParam("begin", Shape(pid, 0, 0, 0))
-        .SetParam("end", Shape(pid+1, shape[1], shape[2], 3))
+        .SetInput("rhs", mx_img)
+        .SetParam("begin", Shape(b, 0, 0, 0))
+        .SetParam("end", Shape(b+1, shape[1], shape[2], 3))
         ().Invoke(data); 
     }
 
@@ -160,24 +190,24 @@ void RunDemo() {
     // begin forward
     auto start = std::chrono::steady_clock::now();
     exec->Forward(false);
-    auto ids_s = exec->outputs[0].Copy(Context(kCPU, 0));
-    auto scores_s = exec->outputs[1].Copy(Context(kCPU, 0));
-    auto bboxes_s = exec->outputs[2].Copy(Context(kCPU, 0));
+    auto batch_ids = exec->outputs[0].Copy(Context(kCPU, 0));
+    auto batch_scores = exec->outputs[1].Copy(Context(kCPU, 0));
+    auto batch_bboxes = exec->outputs[2].Copy(Context(kCPU, 0));
     NDArray ids, scores, bboxes;
-    NDArray::WaitAll();
-    for (mx_uint pid = 0; pid < batch_size; ++pid) {
-      auto sop = Operator("slice_axis").SetParam("axis", 0).SetParam("begin", pid).SetParam("end", pid + 1);
-      auto sop2 = Operator("slice_axis").SetParam("axis", 0).SetParam("begin", pid).SetParam("end", pid + 1);
-      auto sop3 = Operator("slice_axis").SetParam("axis", 0).SetParam("begin", pid).SetParam("end", pid + 1);
-      sop(ids_s).Invoke(ids);
-      sop2(scores_s).Invoke(scores);
-      sop3(bboxes_s).Invoke(bboxes);
-      NDArray::WaitAll();
-
-      auto end = std::chrono::steady_clock::now();
-      if (!args::quite) {
-        LOG(INFO) << "Elapsed time {Forward->Result}: " << std::chrono::duration<double, std::milli>(end - start).count() << " ms";
-      }
+    for (mx_uint b = 0; b < batch_size; ++b) {
+      cv::Mat image = imgs[b];
+      Operator("slice_axis")
+        .SetParam("axis", 0)
+        .SetParam("begin", b)
+        .SetParam("end", b + 1)(batch_ids).Invoke(ids);
+      Operator("slice_axis")
+        .SetParam("axis", 0)
+        .SetParam("begin", b)
+        .SetParam("end", b + 1)(batch_scores).Invoke(scores);
+      Operator("slice_axis")
+        .SetParam("axis", 0)
+        .SetParam("begin", b)
+        .SetParam("end", b + 1)(batch_bboxes).Invoke(bboxes);
 
       // draw boxes
       auto plt = viz::PlotBbox(image, bboxes, scores, ids, args::viz_thresh, synset::CLASS_NAMES, std::map<int, cv::Scalar>(), !args::quite);
@@ -193,6 +223,11 @@ void RunDemo() {
         cv::imwrite(args::output, plt);
       }
 
+    }
+
+    auto end = std::chrono::steady_clock::now();
+    if (!args::quite) {
+      LOG(INFO) << "Elapsed time {Forward->Result}: " << std::chrono::duration<double, std::milli>(end - start).count() << " ms";
     }
 
     delete exec;
